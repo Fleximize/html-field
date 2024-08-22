@@ -231,38 +231,40 @@ abstract class HtmlField extends Field
             $value = preg_replace('/  +/', ' ', $value);
         }
 
-        // Find any element URLs and swap them with ref tags
-        $value = preg_replace_callback(
-            sprintf('/(href=|src=)([\'"])([^\'"\?#]*)(\?[^\'"\?#]+)?(#[^\'"\?#]+)?(?:#|%%23)([\w\\\\]+)\:(\d+)(?:@(\d+))?(\:(?:transform\:)?%s)?\2/', HandleValidator::$handlePattern),
-            function($matches) {
-                [, $attr, $q, $url, $query, $hash, $elementType, $ref, $siteId, $transform] = array_pad($matches, 10, null);
+        if (!defined('DISABLE_CRAFT_REFERENCE_TAGS') || !DISABLE_CRAFT_REFERENCE_TAGS) {
+            // Find any element URLs and swap them with ref tags
+            $value = preg_replace_callback(
+                sprintf('/(href=|src=)([\'"])([^\'"\?#]*)(\?[^\'"\?#]+)?(#[^\'"\?#]+)?(?:#|%%23)([\w\\\\]+)\:(\d+)(?:@(\d+))?(\:(?:transform\:)?%s)?\2/', HandleValidator::$handlePattern),
+                function ($matches) {
+                    [, $attr, $q, $url, $query, $hash, $elementType, $ref, $siteId, $transform] = array_pad($matches, 10, null);
 
-                // Create the ref tag, and make sure :url is in there
-                $ref = "$elementType:$ref" . ($siteId ? "@$siteId" : '') . ($transform ?: ':url');
+                    // Create the ref tag, and make sure :url is in there
+                    $ref = "$elementType:$ref" . ($siteId ? "@$siteId" : '') . ($transform ?: ':url');
 
-                if ($query || $hash) {
-                    // Make sure that the query/hash isn't actually part of the parsed URL
-                    // - someone's Entry URL Format could include "?slug={slug}" or "#{slug}", etc.
-                    // - assets could include ?mtime=X&focal=none, etc.
-                    $parsed = Craft::$app->getElements()->parseRefs("{{$ref}}");
-                    if ($query) {
-                        // Decode any HTML entities, e.g. &amp;
-                        $query = Html::decode($query);
-                        if (mb_strpos($parsed, $query) !== false) {
-                            $url .= $query;
-                            $query = '';
+                    if ($query || $hash) {
+                        // Make sure that the query/hash isn't actually part of the parsed URL
+                        // - someone's Entry URL Format could include "?slug={slug}" or "#{slug}", etc.
+                        // - assets could include ?mtime=X&focal=none, etc.
+                        $parsed = Craft::$app->getElements()->parseRefs("{{$ref}}");
+                        if ($query) {
+                            // Decode any HTML entities, e.g. &amp;
+                            $query = Html::decode($query);
+                            if (mb_strpos($parsed, $query) !== false) {
+                                $url .= $query;
+                                $query = '';
+                            }
+                        }
+                        if ($hash && mb_strpos($parsed, $hash) !== false) {
+                            $url .= $hash;
+                            $hash = '';
                         }
                     }
-                    if ($hash && mb_strpos($parsed, $hash) !== false) {
-                        $url .= $hash;
-                        $hash = '';
-                    }
-                }
 
-                return sprintf('%s%s%s', "$attr$q{", "$ref||$url", "}$query$hash$q");
-            },
-            $value
-        );
+                    return sprintf('%s%s%s', "$attr$q{", "$ref||$url", "}$query$hash$q");
+                },
+                $value
+            );
+        }
 
         // Swap any regular URLS with element refs, too
 
@@ -297,69 +299,71 @@ abstract class HtmlField extends Field
 
         array_multisort($baseUrlLengths, SORT_DESC, SORT_NUMERIC, $baseUrls, $siteIds, $volumeIds);
 
-        $value = preg_replace_callback(
-            '/(href=|src=)([\'"])((?:\/|http).*?)\2/',
-            function($matches) use ($baseUrls, $siteIds, $volumeIds) {
-                $url = $matches[3] ?? null;
+        if (!defined('DISABLE_CRAFT_REFERENCE_TAGS') || !DISABLE_CRAFT_REFERENCE_TAGS) {
+            $value = preg_replace_callback(
+                '/(href=|src=)([\'"])((?:\/|http).*?)\2/',
+                function ($matches) use ($baseUrls, $siteIds, $volumeIds) {
+                    $url = $matches[3] ?? null;
 
-                if (!$url) {
-                    return '';
-                }
+                    if (!$url) {
+                        return '';
+                    }
 
-                foreach ($baseUrls as $key => $baseUrl) {
-                    if (StringHelper::startsWith($url, $baseUrl)) {
-                        // Drop query
-                        $query = parse_url($url, PHP_URL_QUERY);
+                    foreach ($baseUrls as $key => $baseUrl) {
+                        if (StringHelper::startsWith($url, $baseUrl)) {
+                            // Drop query
+                            $query = parse_url($url, PHP_URL_QUERY);
 
-                        if (!empty($query)) {
-                            break;
-                        }
-
-                        $uri = preg_replace('/\?.*/', '', $url);
-
-                        // Drop page trigger
-                        $pageTrigger = Craft::$app->getConfig()->getGeneral()->getPageTrigger();
-                        if (strpos($pageTrigger, '?') !== 0) {
-                            $pageTrigger = preg_quote($pageTrigger, '/');
-                            $uri = preg_replace("/^(?:(.*)\/)?$pageTrigger(\d+)$/", '', $uri);
-                        }
-
-                        // Drop the base URL
-                        $uri = StringHelper::removeLeft($uri, $baseUrl);
-
-                        if ($siteIds[$key] !== null) {
-                            // site URL
-                            if ($element = Craft::$app->getElements()->getElementByUri($uri, $siteIds[$key], true)) {
-                                $refHandle = $element::refHandle();
-                                if ($refHandle) {
-                                    $url = sprintf('{%s:%s@%s:url||%s}', $refHandle, $element->id, $siteIds[$key], $url);
-                                }
+                            if (!empty($query)) {
                                 break;
                             }
-                        } else {
-                            // volume URL
-                            $filename = basename($uri);
-                            $folderPath = dirname($uri);
 
-                            $assetId = Asset::find()
-                                ->volumeId($volumeIds[$key])
-                                ->filename($filename)
-                                ->andWhere(['volumeFolders.path' => $folderPath !== '.' ? $folderPath : ''])
-                                ->select(['elements.id'])
-                                ->scalar();
+                            $uri = preg_replace('/\?.*/', '', $url);
 
-                            if ($assetId) {
-                                $url = sprintf('{asset:%s:url||%s}', $assetId, $url);
-                                break;
+                            // Drop page trigger
+                            $pageTrigger = Craft::$app->getConfig()->getGeneral()->getPageTrigger();
+                            if (strpos($pageTrigger, '?') !== 0) {
+                                $pageTrigger = preg_quote($pageTrigger, '/');
+                                $uri = preg_replace("/^(?:(.*)\/)?$pageTrigger(\d+)$/", '', $uri);
+                            }
+
+                            // Drop the base URL
+                            $uri = StringHelper::removeLeft($uri, $baseUrl);
+
+                            if ($siteIds[$key] !== null) {
+                                // site URL
+                                if ($element = Craft::$app->getElements()->getElementByUri($uri, $siteIds[$key], true)) {
+                                    $refHandle = $element::refHandle();
+                                    if ($refHandle) {
+                                        $url = sprintf('{%s:%s@%s:url||%s}', $refHandle, $element->id, $siteIds[$key], $url);
+                                    }
+                                    break;
+                                }
+                            } else {
+                                // volume URL
+                                $filename = basename($uri);
+                                $folderPath = dirname($uri);
+
+                                $assetId = Asset::find()
+                                    ->volumeId($volumeIds[$key])
+                                    ->filename($filename)
+                                    ->andWhere(['volumeFolders.path' => $folderPath !== '.' ? $folderPath : ''])
+                                    ->select(['elements.id'])
+                                    ->scalar();
+
+                                if ($assetId) {
+                                    $url = sprintf('{asset:%s:url||%s}', $assetId, $url);
+                                    break;
+                                }
                             }
                         }
                     }
-                }
 
-                return $matches[1] . $matches[2] . $url . $matches[2];
-            },
-            $value
-        );
+                    return $matches[1] . $matches[2] . $url . $matches[2];
+                },
+                $value
+            );
+        }
 
         if (Craft::$app->getDb()->getIsMysql()) {
             // Encode any 4-byte UTF-8 characters.
